@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pruned-decision-tree"
+version = "0.1.0"
+description = "Extended functionality for sklearn DecisionTree"
+authors = [
+  { name="Daniel Dąbrowski", email="Daniel.Dabrowski@polsl.pl" }
+]
+readme = "README.md"
+requires-python = ">=3.11.8"
+dependencies = [
+    "scikit-learn>=1.4.2",
+    "numpy",
+    "pandas"
+]
+
+[project.urls]
+Homepage = "https://github.com/AI-DIP/PrunedDecisionTree"
