@@ -7,7 +7,6 @@ def prune_redundant_nodes(clf):
     where both children are leaves that predict the same class.
     """
     tree = clf.tree_
-
     def is_leaf(inner_node):
         return tree.children_left[inner_node] == _tree.TREE_LEAF
 

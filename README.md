@@ -9,5 +9,5 @@ pip install .
 ```
 
 ```bash
-pip install git+https://github.com/twojlogin/my_decision_tree.git
+pip install git+https://github.com/AI-DIP/PrunedDecisionTree.git
 ```

@@ -1,13 +1,14 @@
+import numpy as np
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import StratifiedKFold, cross_validate
+from sklearn.base import ClassifierMixin, BaseEstimator
+from scipy.stats import ttest_rel
 
 from .utils import prune_redundant_nodes
-class PrunedDecisionTree(DecisionTreeClassifier):
+
+class PrunedDecisionTree(ClassifierMixin, BaseEstimator):
     """
     """
-    auto_prune:bool = False
-    complexity_pruning_cost = None
-    pruning_accuracy = None
     
     def __init__(
         self,
@@ -25,28 +26,29 @@ class PrunedDecisionTree(DecisionTreeClassifier):
         class_weight=None,
         ccp_alpha=0.0,
         monotonic_cst=None,
-        auto_prune:bool = False
     ):
-        super().__init__(
-            criterion=criterion,
-            splitter=splitter,
-            max_depth=max_depth,
-            min_samples_split=min_samples_split,
-            min_samples_leaf=min_samples_leaf,
-            min_weight_fraction_leaf=min_weight_fraction_leaf,
-            max_features=max_features,
-            random_state=random_state,
-            max_leaf_nodes=max_leaf_nodes,
-            min_impurity_decrease=min_impurity_decrease,
-            class_weight=class_weight,
-            ccp_alpha=ccp_alpha,
-            monotonic_cst=monotonic_cst
-        )
-        self.auto_prune = auto_prune
+        self.criterion=criterion
+        self.splitter=splitter
+        self.max_depth=max_depth
+        self.min_samples_split=min_samples_split
+        self.min_samples_leaf=min_samples_leaf
+        self.min_weight_fraction_leaf=min_weight_fraction_leaf
+        self.max_features=max_features
+        self.random_state=random_state
+        self.max_leaf_nodes=max_leaf_nodes
+        self.min_impurity_decrease=min_impurity_decrease
+        self.class_weight=class_weight
+        self.ccp_alpha=ccp_alpha
+        self.monotonic_cst=monotonic_cst
+        
+        self._tree_estimator = None  
+        self.complexity_pruning_cost = None
+        self.pruning_accuracy = None
+        self.delta:float = 0.05
     
     def _create_copy_estimator(self, ccp_alpha=None):
         if ccp_alpha is None: ccp_alpha=self.ccp_alpha
-        temp_estimator = PrunedDecisionTree(
+        temp_estimator = DecisionTreeClassifier(
                 criterion=self.criterion,
                 splitter=self.splitter,
                 max_depth=self.max_depth,
@@ -67,32 +69,46 @@ class PrunedDecisionTree(DecisionTreeClassifier):
             X, 
             y,
             sample_weight=None,
-            check_input:bool=True,
-            calc_complexity:bool=False,
-            auto_prune:bool=False):
-        
-        if auto_prune or self.auto_prune:
-                temp_estimator = self._create_copy_estimator()
-                temp_estimator.fit(X,y,calc_complexity=True)
-                self.complexity_pruning_cost = temp_estimator.cost_complexity_pruning_path(X,y)
+            check_input:bool=True
+        ):
+        #GET COMPLEXITY COST
+        temp_estimator = self._create_copy_estimator()
+        #temp_estimator.fit(X,y)
+        self.complexity_pruning_cost = temp_estimator.cost_complexity_pruning_path(X,y)
 
-                self.pruning_accuracy = {"ccp_alphas":[],"acc":[]}
-                cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
-                for ccp_alpha in self.complexity_pruning_cost.ccp_alphas:
-                    est = self._create_copy_estimator(ccp_alpha=ccp_alpha)
-                    res = cross_validate(est, X,y,cv=cv, scoring=['accuracy'])
-                    self.pruning_accuracy["ccp_alphas"].append(ccp_alpha)
-                    self.pruning_accuracy["acc"].append(res["test_accuracy"].mean())
+        #CHECK ALL CCP ALPHA
+        self.pruning_accuracy = {"ccp_alphas":[],"acc_mean":[], "acc_folds":[]}
+        cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
+        
+        for ccp_alpha in self.complexity_pruning_cost.ccp_alphas:
+            est = self._create_copy_estimator(ccp_alpha=ccp_alpha)
+            res = cross_validate(est, X,y,cv=cv, scoring=['accuracy'])
+            
+            self.pruning_accuracy["ccp_alphas"].append(ccp_alpha)
+            self.pruning_accuracy["acc_folds"].append(res["test_accuracy"])
+            self.pruning_accuracy["acc_mean"].append(res["test_accuracy"].mean())
+        
+        #SELECT BEST CCP_ALPHA
+        best_ccp_alpha_index = np.argmax(self.pruning_accuracy["acc_mean"])
+        best_folds_scores = self.pruning_accuracy["acc_folds"][best_ccp_alpha_index]
+        
+        best_selected_ccp_index = best_ccp_alpha_index
+        
+        for i in range(len(self.pruning_accuracy["ccp_alphas"])):
+            scores = self.pruning_accuracy["acc_folds"][i]
+            t_stat, p_value = ttest_rel(best_folds_scores, scores)
+            # print(f"CCP:{self.pruning_accuracy['ccp_alphas'][i]} T:{t_stat} P:{p_value} ACC:{self.pruning_accuracy['acc_mean'][i]}")
+            if p_value > self.delta:
+                best_selected_ccp_index = i
+        
+        self.ccp_alpha = self.pruning_accuracy["ccp_alphas"][best_selected_ccp_index]
+        # print(f"### CCP_ALPHA: {self.ccp_alpha}")
+        if(self.ccp_alpha < 0):self.ccp_alpha=0
+        
+        self._tree_estimator = self._create_copy_estimator(ccp_alpha=self.ccp_alpha)
+        self._tree_estimator.fit(X,y,sample_weight,check_input)
                 
-                self.ccp_alpha = self.pruning_accuracy["ccp_alphas"][max(range(len(self.pruning_accuracy["acc"])), key=lambda i: self.pruning_accuracy["acc"][i])]
-                if(self.ccp_alpha < 0):self.ccp_alpha=0
-        
-        
-        super().fit(X,y,sample_weight,check_input)
-        
-        if calc_complexity and not(auto_prune): self.complexity_pruning_cost = self.cost_complexity_pruning_path(X,y)
-        
-        if auto_prune:prune_redundant_nodes(self)
+        prune_redundant_nodes(self._tree_estimator)
 
         return self
 
@@ -110,3 +126,9 @@ class PrunedDecisionTree(DecisionTreeClassifier):
 
     def get_ccp_alpha(self):
         return self.ccp_alpha
+    
+    def predict(self, X, check_input: bool = True):
+        return self._tree_estimator.predict(X,check_input=check_input)
+    
+    def get_feature_importances(self):
+        return self._tree_estimator.feature_importances_
